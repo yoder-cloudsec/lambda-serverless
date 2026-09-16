@@ -11,8 +11,8 @@ A fully serverless REST API — Lambda functions behind an HTTP API Gateway, bac
           │
           ▼
    ┌─────────────────────┐
-   │  API Gateway (HTTP)   │
-   └──────────┬───────────┘
+   │  API Gateway (HTTP) │
+   └──────────┬──────────┘
               │
    ┌──────────┼──────────────────────────┬───────────────────┐
    │          │                          │                   │
@@ -50,22 +50,20 @@ create_task  get_task              list_tasks            delete_task
 ## Key Design Decisions
 
 **Why DynamoDB `PAY_PER_REQUEST` instead of provisioned capacity?**
-Provisioned capacity bills hourly for reserved read/write throughput regardless of actual usage — the same "always billing" model as an EC2 instance or NAT Gateway. On-demand billing was chosen specifically to make this architecture's idle cost genuinely zero, not just low, which matters for a project that isn't torn down and rebuilt on the same tight cadence as the always-on projects in this portfolio.
+Provisioned capacity bills hourly for reserved read/write throughput regardless of actual usage, the same "always billing" model as an EC2 instance or NAT Gateway. On-demand billing was chosen specifically to make this architecture's idle cost genuinely zero, not just low, which matters for a project that isn't torn down and rebuilt on the same tight cadence as the always-on projects in this portfolio.
 
 **Why HTTP API instead of REST API (API Gateway)?**
 HTTP API is AWS's newer, simpler, and cheaper API Gateway offering, appropriate for a straightforward Lambda-backed proxy integration like this one. REST API offers more configuration surface (request validation, API keys, usage plans) that this project doesn't need.
 
 **Why a shared IAM execution role across all four functions, rather than one role per function?**
-All four functions need identical permissions — read/write access to the same single DynamoDB table, nothing else. A shared role avoids duplicating an identical trust and permissions policy four times; if the functions' permission needs diverged later, splitting them would be straightforward.
+All four functions need identical permissions: read/write access to the same single DynamoDB table, nothing else. A shared role avoids duplicating an identical trust and permissions policy four times. If the functions' permission needs diverged later, splitting them would be straightforward.
 
 **Why `Scan` for the list-tasks endpoint, despite its known inefficiency?**
 `Scan` reads every item in the table and is a legitimate anti-pattern at real scale. It was used here deliberately for simplicity, with the limitation explicitly acknowledged — a production version would need a query-optimized access pattern (e.g., a secondary index) rather than scanning the full table on every request.
 
 ## Debugging Notes (Real Issues Hit During This Build)
 
-**API Gateway silently base64-encodes the request body under certain conditions.** The first real HTTP request through the API returned a generic `Internal Server Error`. CloudWatch Logs showed a `JSONDecodeError` on an empty-looking string. Adding a debug line to print the raw incoming event revealed the actual cause: the test request was sent via `curl -d`, which defaults to a `Content-Type` of `application/x-www-form-urlencoded` rather than `application/json`. Because of this, API Gateway's HTTP API marked the request `isBase64Encoded: true` and base64-encoded the body defensively. The fix was two-fold: making the Lambda function defensively check `isBase64Encoded` and decode accordingly (so it correctly handles either case), and correcting the test requests to send an explicit `Content-Type: application/json` header, matching how a real client would behave. This is a genuinely non-obvious, easy-to-hit issue not covered by most introductory Lambda/API Gateway material.
-
-**A console region mismatch briefly looked like a failed deployment.** After a successful `terraform apply`, the newly created Lambda function didn't appear in the AWS Console's Lambda list. `terraform state list` and the AWS CLI confirmed the function genuinely existed; the console was simply displaying a different region than the one the provider was configured for. Resolved by checking the region selector directly rather than assuming the deployment had failed.
+**API Gateway base64-encodes the request body under certain conditions.** The first real HTTP request through the API returned a generic `Internal Server Error`. CloudWatch Logs showed a `JSONDecodeError` on an empty-looking string. Adding a debug line to print the raw incoming event revealed the actual cause: the test request was sent via `curl -d`, which defaults to a `Content-Type` of `application/x-www-form-urlencoded` rather than `application/json`. Because of this, API Gateway's HTTP API marked the request `isBase64Encoded: true` and base64-encoded the body defensively. The fix was two-fold: making the Lambda function defensively check `isBase64Encoded` and decode accordingly (so it correctly handles either case), and correcting the test requests to send an explicit `Content-Type: application/json` header, matching how a real client would behave.
 
 ## What I'd Add for Production Use
 
@@ -77,4 +75,4 @@ All four functions need identical permissions — read/write access to the same 
 
 ## Author's Note
 
-This project was built specifically to demonstrate a different compute and cost model than the rest of this portfolio — no servers, no idle billing, and a fundamentally different failure mode (a function either runs correctly on invocation or it doesn't; there's no "is it still running" question at all). The base64/content-type issue in particular was left in this write-up in full because it's a genuinely realistic problem — not a contrived one — and finding it through CloudWatch Logs rather than trial-and-error guessing is the actual skill being demonstrated.
+This project was built specifically to demonstrate a different compute and cost model than the rest of this portfolio — no servers, no idle billing, and a fundamentally different failure mode (a function either runs correctly on invocation or it doesn't; there's no "is it still running" question at all). The base64/content-type issue in particular was left in this write-up in full because it's a genuinely realistic problem, not a contrived one and finding it through CloudWatch Logs rather than trial-and-error guessing is the actual skill being demonstrated.
